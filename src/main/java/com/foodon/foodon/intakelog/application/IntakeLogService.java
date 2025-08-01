@@ -17,9 +17,6 @@ import com.foodon.foodon.member.repository.MemberStatusRepository;
 import com.foodon.foodon.member.domain.Member;
 import com.foodon.foodon.member.repository.NutrientPlanRepository;
 import lombok.RequiredArgsConstructor;
-import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
-import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -44,12 +41,13 @@ public class IntakeLogService {
     private final ActivityLevelRepository activityLevelRepository;
     private final MemberStatusRepository memberStatusRepository;
 
-
+    /**
+     * 식사 정보를 기반으로 섭취 기록을 생성하거나 갱신합니다.
+     *
+     * @param member 식사한 회원
+     * @param meal 섭취한 식사 정보
+     */
     @Transactional
-    @CacheEvict(
-            value = "intakeCalendar",
-            key = "'calendar:' + #member.id + ':' + T(java.time.YearMonth).from(#meal.mealTime)"
-    )
     public void saveIntakeLog(Member member, Meal meal) {
         LocalDate date = meal.getMealTime().toLocalDate();
         IntakeLog intakeLog = findOrCreateIntakeLog(member, date);
@@ -69,7 +67,15 @@ public class IntakeLogService {
         return IntakeLog.createIntakeLogOfMember(member, date, goalKcal);
     }
 
-    @Cacheable(value = "intakeCalendar", key = "'calendar:' + #member.id + ':' + #yearMonth")
+    /**
+     * 월별 섭취 요약 정보를 조회합니다.
+     * 각 날짜별로 섭취 기록이 존재하면 해당 기록을,
+     * 없으면 당일 목표 칼로리를 기반으로 빈 기록을 반환합니다.
+     *
+     * @param yearMonth 조회할 연월
+     * @param member 조회 대상 회원
+     * @return 해당 월의 섭취 요약 리스트
+     */
     public List<IntakeSummaryResponse> getIntakeLogCalendar(
             YearMonth yearMonth,
             Member member
@@ -163,6 +169,14 @@ public class IntakeLogService {
         }
     }
 
+    /**
+     * 특정 날짜의 섭취 상세 정보를 조회합니다.
+     * 섭취 기록이 있으면 실제 기록 데이터를, 없으면 목표 섭취량만 반환합니다.
+     *
+     * @param date 조회할 날짜
+     * @param member 조회 대상 회원
+     * @return 섭취 상세 응답 DTO
+     */
     public IntakeDetailResponse getIntakeDailyDetail(
             LocalDate date,
             Member member
@@ -180,6 +194,14 @@ public class IntakeLogService {
                 });
     }
 
+    /**
+     * 특정 날짜의 섭취 요약 정보를 조회합니다.
+     * 섭취 기록이 있으면 해당 데이터를, 없으면 목표 칼로리만 포함한 빈 기록을 반환합니다.
+     *
+     * @param date 조회할 날짜
+     * @param member 조회 대상 회원
+     * @return 섭취 요약 응답 DTO
+     */
     public IntakeSummaryResponse getIntakeLogByTargetDate(LocalDate date, Member member) {
         return findIntakeLogByDate(member, date)
                 .map(IntakeSummaryResponse::withIntakeLog)
@@ -222,5 +244,4 @@ public class IntakeLogService {
                         () -> new MemberException.MemberBadRequestException(MemberErrorCode.MEMBER_STATUS_NOT_FOUND)
                 );
     }
-
 }
