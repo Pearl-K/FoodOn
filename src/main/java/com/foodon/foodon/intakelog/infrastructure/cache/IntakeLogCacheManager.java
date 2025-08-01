@@ -1,6 +1,5 @@
 package com.foodon.foodon.intakelog.infrastructure.cache;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foodon.foodon.intakelog.dto.IntakeSummaryResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -49,7 +48,6 @@ public class IntakeLogCacheManager {
             }
         }
 
-        // 슬라이딩 TTL 적용
         redisTemplate.expire(cacheKey, CALENDAR_TTL);
         return result;
     }
@@ -59,24 +57,24 @@ public class IntakeLogCacheManager {
      * 동일 월 단위 캐시 키에 HSET 형태로 추가되며, TTL이 갱신됩니다.
      *
      * @param userId 사용자 ID
-     * @param yyMm 저장 대상 연월 (예: 2025-08)
+     * @param yearMonth 저장 대상 연월 (예: 2025-08)
      * @param date 저장할 날짜 (예: 2025-08-01)
      * @param value {@link IntakeSummaryResponse} 객체
      */
     public void putDay(
             String userId,
-            YearMonth yyMm,
+            YearMonth yearMonth,
             LocalDate date,
             IntakeSummaryResponse value
     ) {
-        String key = buildKey(userId, yyMm);
+        String key = buildKey(userId, yearMonth);
         String field = date.toString();
 
         redisTemplate.opsForHash().put(key, field, value);
         redisTemplate.expire(key, CALENDAR_TTL);
     }
 
-    private String buildKey(String userId, YearMonth yyMm) {
-        return String.format(CALENDAR_INTAKE_KEY_PREFIX, userId, yyMm.toString());
+    private String buildKey(String userId, YearMonth yearMonth) {
+        return String.format(CALENDAR_INTAKE_KEY_PREFIX, userId, yearMonth.toString());
     }
 }

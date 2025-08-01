@@ -5,6 +5,7 @@ import com.foodon.foodon.intakelog.domain.IntakeLog;
 import com.foodon.foodon.intakelog.dto.IntakeDetailResponse;
 import com.foodon.foodon.intakelog.dto.IntakeSummaryResponse;
 import com.foodon.foodon.intakelog.exception.IntakeLogException.IntakeLogBadRequestException;
+import com.foodon.foodon.intakelog.infrastructure.cache.IntakeLogCacheManager;
 import com.foodon.foodon.intakelog.repository.IntakeLogRepository;
 import com.foodon.foodon.meal.domain.Meal;
 import com.foodon.foodon.member.domain.ActivityLevel;
@@ -40,6 +41,7 @@ public class IntakeLogService {
     private final NutrientPlanRepository nutrientPlanRepository;
     private final ActivityLevelRepository activityLevelRepository;
     private final MemberStatusRepository memberStatusRepository;
+    private final IntakeLogCacheManager cacheManager;
 
     /**
      * 식사 정보를 기반으로 섭취 기록을 생성하거나 갱신합니다.
@@ -53,6 +55,10 @@ public class IntakeLogService {
         IntakeLog intakeLog = findOrCreateIntakeLog(member, date);
         intakeLog.updateIntakeFromMeal(meal);
         intakeLogRepository.save(intakeLog);
+
+        YearMonth yearMonth = YearMonth.from(date);
+        IntakeSummaryResponse updatedResponse = getIntakeSummaryByTargetDate(date, member);
+        cacheManager.putDay(member.getId().toString(), yearMonth, date, updatedResponse);
     }
 
     private IntakeLog findOrCreateIntakeLog(Member member, LocalDate date) {
@@ -80,14 +86,47 @@ public class IntakeLogService {
             YearMonth yearMonth,
             Member member
     ) {
+        String userId = member.getId().toString();
         List<LocalDate> allDates = getAllDatesInMonth(yearMonth);
+
+        Map<LocalDate, IntakeSummaryResponse> cachedLogs = cacheManager.getCachedMonth(userId, yearMonth);
+
+        List<LocalDate> missingDates = allDates.stream()
+                .filter(date -> !cachedLogs.containsKey(date))
+                .toList();
+
+        Map<LocalDate, IntakeSummaryResponse> calculatedLog = missingDates.isEmpty()
+                ? Map.of()
+                : calculateMissingDateLogs(missingDates, yearMonth, member);
+
+        return allDates.stream()
+                .map(date -> cachedLogs.containsKey(date)
+                        ? cachedLogs.get(date)
+                        : calculatedLog.get(date))
+                .toList();
+    }
+
+    private Map<LocalDate, IntakeSummaryResponse> calculateMissingDateLogs(
+            List<LocalDate> missingDates,
+            YearMonth yearMonth,
+            Member member
+    ) {
         TreeMap<LocalDate, MemberStatus> recordMap = findLatestMemberStatusSortedMap(member, yearMonth);
         Map<Long, ActivityLevel> activityLevelMap = findAllActivityLevels();
         Map<LocalDate, IntakeLog> intakeLogMap = findIntakeLogsInMonth(member, yearMonth);
 
-        return allDates.stream()
-                .map(date -> convertToIntakeSummaryResponse(date, member, intakeLogMap, recordMap, activityLevelMap))
-                .toList();
+        Map<LocalDate, IntakeSummaryResponse> result = new HashMap<>();
+        String userId = member.getId().toString();
+
+        for (LocalDate date : missingDates) {
+            IntakeSummaryResponse summaryResponse = convertToIntakeSummaryResponse(
+                    date, member, intakeLogMap, recordMap, activityLevelMap
+            );
+            result.put(date, summaryResponse);
+            cacheManager.putDay(userId, yearMonth, date, summaryResponse);
+        }
+
+        return result;
     }
 
     private Map<Long, ActivityLevel> findAllActivityLevels() {
@@ -151,7 +190,10 @@ public class IntakeLogService {
         ));
     }
 
-    private Map<LocalDate, IntakeLog> findIntakeLogsInMonth(Member member, YearMonth yearMonth) {
+    private Map<LocalDate, IntakeLog> findIntakeLogsInMonth(
+            Member member,
+            YearMonth yearMonth
+    ) {
         LocalDate startDate = yearMonth.atDay(1);
         LocalDate endDate = yearMonth.atEndOfMonth();
 
@@ -202,7 +244,7 @@ public class IntakeLogService {
      * @param member 조회 대상 회원
      * @return 섭취 요약 응답 DTO
      */
-    public IntakeSummaryResponse getIntakeLogByTargetDate(LocalDate date, Member member) {
+    public IntakeSummaryResponse getIntakeSummaryByTargetDate(LocalDate date, Member member) {
         return findIntakeLogByDate(member, date)
                 .map(IntakeSummaryResponse::withIntakeLog)
                 .orElseGet(() -> {
