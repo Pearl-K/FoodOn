@@ -1,0 +1,107 @@
+spring:
+  application:
+    name: FoodOn
+
+  config:
+    import: optional:file:.env.prod[.properties]
+
+  servlet:
+    multipart:
+      max-file-size: 10MB        # 파일 1개당 최대 크기
+
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: ${DATASOURCE_URL}
+    username: ${DATASOURCE_USERNAME}
+    password: ${DATASOURCE_PASSWORD}
+    hikari:
+      maximum-pool-size: 16
+
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT}
+      password: ${REDIS_PASSWORD}
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        show_sql: true
+        format_sql: true
+        dialect: org.hibernate.dialect.MySQLDialect
+    open-in-view: false
+
+  auth:
+    jwt:
+      secret-key: ${JWT_SECRET_KEY}
+      access-token-expiry: ${JWT_ACCESS_TOKEN_EXPIRY}
+      refresh-token-expiry: ${JWT_REFRESH_TOKEN_EXPIRY}
+      super-token-expiry: 2592000000   # 30일 기한: 30 * 24 * 60 * 60 * 1000
+
+  tomcat:
+    mbeanregistry:
+      enabled: true
+
+cloud:
+  aws:
+    s3:
+      bucket: ${CLOUD_AWS_S3_BUCKET}
+      upload-path: ${S3_UPLOAD_PATH}
+      base-url: ${S3_BASE_URL}
+    region:
+      static: ${CLOUD_AWS_REGION_STATIC}
+      auto: false
+    stack:
+      auto: false
+    credentials:
+      accessKey: ${CLOUD_AWS_CREDENTIALS_ACCESS_KEY}
+      secretKey: ${CLOUD_AWS_CREDENTIALS_SECRET_KEY}
+
+meal-detect-ai-model:
+  url: http://k12s203.p.ssafy.io:8000/ai/detect2
+
+file:
+  upload-dir: ${java.io.tmpdir}/files/
+
+server:
+  forward-headers-strategy: NATIVE
+  servlet:
+    context-path: /api/v1
+  encoding:
+    enabled: true
+    charset: UTF-8
+    force: true
+
+kakao:
+  api:
+    url: https://kapi.kakao.com
+
+
+logging:
+  level:
+    root: INFO
+    org:
+      springframework: DEBUG
+    jdbc:
+      sqlonly: DEBUG
+      resultsettable: DEBUG
+      audit: TRACE
+      resultset: TRACE
+      connection: OFF
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql: TRACE
+
+image:
+  default:
+    meal-url: ${S3_BASE_URL}${S3_UPLOAD_PATH}/0b4b1c06-dbf3-4259-882f-5b10d03657aa_20250520215957771237.png
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: prometheus, metrics
+  endpoint:
+    prometheus:
+      enabled: true
