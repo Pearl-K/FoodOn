@@ -1,4 +1,5 @@
 HELP.md
+.env
 .gradle
 build/
 !gradle/wrapper/gradle-wrapper.jar
@@ -37,4 +38,4 @@ out/
 .vscode/
 
 ## env 파일
-.env.local
+.env

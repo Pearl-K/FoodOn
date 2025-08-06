@@ -26,42 +26,58 @@
 - 캐시 미스 시 매번 `TreeMap` 재생성 + per-day 계산이 반복됨
 
 
-기존 로직 흐름은 아래와 같다. (추후 SequenceDiagram 으로 변경 예정)
+기존 로직 흐름은 아래와 같다.
 ```text
-[1] 월 전체 날짜 생성
-[2] 가입일 ~ 해당월 말일까지 MemberStatus 모두 조회 → TreeMap 생성
-[3] 활동량(ActivityLevel) 전체 조회 → Map<Long, ActivityLevel>
-[4] 해당 월 섭취 로그 조회 → Map<LocalDate, IntakeLog>
-[5] 날짜 루프 돌며 IntakeSummary 생성
-    [A] 섭취 기록 존재: withIntakeLog
-    [B] 기록 없음: 상태 이력 + 활동량으로 goalKcal 계산
-[6] List<IntakeSummaryResponse> 응답
+[Start] → [getAllDatesInMonth()]
+           ↓
+     [find MemberStatus] → TreeMap
+           ↓
+     [find ActivityLevels] → Map
+           ↓
+     [find IntakeLogs] → Map
+           ↓
+     [loop allDates]
+        ├─> [if in cache] → use
+        └─> [else] → [convertToIntakeSummaryResponse()]
+                        └─> [calculate goalKcal]
+           ↓
+[Accumulate into List] → [Return]
+
 ```
 
-- 한 달마다 해당 로직이 반복되는 것을 볼 수 있다.
-- 회원의 활동량(ActivityLevel)과 상태기록(MemberStatus)이 수시로 변경될 수 있다.
-  - 해당 변경은 goalKcal 계산에 큰 영향을 주는 변수이기 때문에 로직 변경이 불가능함
-  - `TreeMap`에서 `floorEntry`를 돌며 변경 지점을 찾는 대신, DB에 모든 날짜별 정보를 저장하여 계산을 단순화 하는 방법도 존재
-  - But, 위 방식은 회원이 많아졌을 때 불필요한 레코드가 쌓여서 용량 관리에 단점이 있었음 → 애플리케이션 단의 계산으로 유지 
+- 해당 로직은 다양한 테이블의 조회와, 날짜 기반의 TreeMap 탐색이 순차적으로 일어난다.
+- 회원의 활동량(`ActivityLevel`)과 상태기록(`MemberStatus`)이 수시로 변경될 수 있다.
+  - 해당 변경은 `goalKcal` 계산에 큰 영향을 주는 변수이기 때문에 로직 변경이 불가능하다.
+  - `TreeMap`에서 `floorEntry`를 돌며 변경 지점을 찾는 대신, DB에 모든 날짜별 정보를 저장하여 계산을 단순화 하는 방법도 존재했다.
+  - But, 위 방식은 회원이 많아졌을 때 무의미한 레코드(변경이 없을 때의 레코드)가 DB에 쌓여서 용량 관리에 단점이 있었다 → 애플리케이션 계층 계산으로 유지 
 
 
-### Cache 계층 (기존 캐시 전략의 문제점)
-- Spring Cache 기반 단순 캐시 `@Cachable` 어노테이션을 통한 단순 `String` 적재
-- 섭취 기록 1건 추가 시 캘린더 전체 캐시 `@CacheEvict`
-- 즉, 사용자가 한 끼만 기록해도 한 달치 계산해놓은 기존 캐시 삭제 + `TreeMap` 재계산 반복
-- 사용자가 하루 3~4회 섭취 기록 write 시 캐시 효율 나쁨 → 오히려 계산 비용만 소모
+### Cache 계층 (식사 기록 추가 시, 매번 캐시 무효화되는 문제점)
+- Spring Cache 기반의 `@Cachable` 어노테이션으로 단순 `String` 타입 캐싱
+- 섭취 기록 1건 추가 시, 캘린더 전체 캐시 `@CacheEvict`
+- 즉, 사용자가 한 끼만 추가 등록하더라도 한 달치를 계산해놓은 기존 캐시가 삭제됨
+- 매번 꾸준히 식사를 기록하는 사용자(active user)일수록 캐시 효율 나쁨 → 오히려 계산 비용만 소모
 
 
 ## 2. 개선 전략
-애플리케이션 로직 측면에서, 월 30일 정도의 `TreeMap` 계산 자체는 효율이 나쁘지 않다.
-병목 원인은 write 할 때마다 캐시가 무효화되어 매번 Cache-miss & 재계산이 발생한다는 점이다.
-
-→ DB 저장 구조를 변경하거나 극한의 계산 로직을 최적화하는 것보다, 캐시 구조를 근본적으로 개선하고 hit-rate를 높이는 것이 투자 비용 대비 효과가 크다.
+애플리케이션 로직 측면에서, 최대 30일 정도의 `TreeMap` 계산 자체는 효율이 나쁘지 않다.
 
 
-### 2-1. 캐시 구조 변경 (HSET 도입)
+병목 원인은 write 할 때마다 캐시가 무효화되어 매번 cache-miss & 재계산이 발생한다는 점이다.
+
+
+DB 저장 구조를 변경해서 무의미한 레코드를 늘리거나, 애플리케이션에서 3개의 독립적인 쿼리를 병렬 처리로 가져오는 최적화 등은 과한 비용 소모이다.
+
+#### → 캐시 구조를 근본적으로 개선하고 hit-rate를 높이는 것이 투자 비용 대비 효과가 크다.
+
+
+### 2-1. 캐시 구조 변경 (Redis Hash 자료구조로 변경)
 - 기존: Key 단위 → calendar:{userId}:{yearMonth}
-- 변경: Hash 구조로 개별 날짜 필드 관리, 갱신 (과거 기록은 그대로 유지)
+- 변경: Hash 타입으로 개별 날짜 필드만 관리 & 갱신 (과거 기록은 그대로 유지)
+- List 자료구조와 비교
+  - 시간에 따라 순차적으로 기록이 쌓이는 구조라면 List 도 괜찮았을 것이다.
+  - 그러나, 사용자가 과거 특정 시점에 섭취했던 기록을 추가하거나 변경할 수도 있다.
+  - 따라서, 요소 간 랜덤 액세스에 비효율적인 List 타입을 고려 대상에서 제외했다.
 
 ```text
 Key   : user:{userId}:intake:{yyyy-MM}
@@ -71,8 +87,8 @@ Value : JSON(IntakeSummaryResponse)
 ```
 
 ### 2-2. TTL 전략
-- 현재 전략: TTL 고정 (예: 30일)
-- 변경 전략: 조회 시 TTL 갱신으로 자주 보는 최신 데이터는 TTL 유지, 과거 데이터는 삭제
+- 기존 전략: 모든 TTL 고정 값
+- 변경 전략: 조회 시 TTL 갱신을 통해 자주 보는 최신 데이터 TTL 유지, 과거 데이터는 자연스럽게 만료
 
 
 ### 2-3. Redis 메모리 관리 정책 설정
